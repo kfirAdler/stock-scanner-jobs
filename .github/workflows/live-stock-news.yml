@@ -8,6 +8,11 @@ on:
         required: true
         default: validate
         options: [validate, send]
+      force_weekly_earnings_preview:
+        description: 'Force one coming-week earnings summary for visual testing'
+        type: boolean
+        required: false
+        default: false
 
 permissions: {contents: read}
 concurrency: {group: live-stock-news, cancel-in-progress: false}
@@ -21,7 +26,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: kfirAdler/stock-scanner
-          ref: 4058ac4c4fcfb14d7a108611308427dc00e89dfb
+          ref: adceda326863d8b32e25949ef7e08df12ca03592
           token: ${{ secrets.PRIVATE_SCANNER_READ_TOKEN }}
           persist-credentials: false
           path: .private-src
@@ -49,8 +54,13 @@ jobs:
           DISCORD_NEWS_CHANNEL_NAME: ${{ vars.DISCORD_NEWS_CHANNEL_NAME || 'stock-news' }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FORCE_WEEKLY_EARNINGS_PREVIEW: ${{ inputs.force_weekly_earnings_preview }}
         run: |
-          if ! python run_live_stock_news.py --send >"${RUNNER_TEMP}/live-news.log" 2>&1; then
+          args=(--send)
+          if [[ "${FORCE_WEEKLY_EARNINGS_PREVIEW}" == "true" ]]; then
+            args+=(--weekly-earnings-preview)
+          fi
+          if ! python run_live_stock_news.py "${args[@]}" >"${RUNNER_TEMP}/live-news.log" 2>&1; then
             echo "Live stock news failed; private output withheld." >&2; exit 1
           fi
           echo "Live stock news completed; private output withheld."
