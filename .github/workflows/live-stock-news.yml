@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: kfirAdler/stock-scanner
-          ref: adceda326863d8b32e25949ef7e08df12ca03592
+          ref: cc57f08a65ed35e958b2db31c69ecf8fcfdde4cf
           token: ${{ secrets.PRIVATE_SCANNER_READ_TOKEN }}
           persist-credentials: false
           path: .private-src
