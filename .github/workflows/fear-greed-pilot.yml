@@ -1,0 +1,95 @@
+name: Fear & Greed pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Validation only, or send a real Discord post"
+        type: choice
+        required: true
+        default: validate
+        options:
+          - validate
+          - send
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fear-greed-pilot
+  cancel-in-progress: true
+
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: fear-greed-pilot
+
+    steps:
+      - name: Check out the private scanner at the reviewed commit
+        uses: actions/checkout@v4
+        with:
+          repository: kfirAdler/stock-scanner
+          ref: a7f66e059fca0a842a26fd27dc1768e6a5ccc11b
+          token: ${{ secrets.PRIVATE_SCANNER_READ_TOKEN }}
+          persist-credentials: false
+          path: .private-src
+          show-progress: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install only Fear & Greed dependencies quietly
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! python -m pip install --disable-pip-version-check --quiet requests python-dotenv CairoSVG >"${RUNNER_TEMP}/pip-install.log" 2>&1; then
+            echo "Dependency installation failed; detailed output was intentionally withheld from the public log." >&2
+            exit 1
+          fi
+
+      - name: Validate private Fear & Greed module without network or sending
+        if: inputs.mode == 'validate'
+        working-directory: .private-src/services/scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! python -c "import fear_greed; assert callable(fear_greed.main) and callable(fear_greed.create_gauge)" >"${RUNNER_TEMP}/private-validation.log" 2>&1; then
+            echo "Private Fear & Greed validation failed; detailed output was intentionally withheld from the public log." >&2
+            exit 1
+          fi
+          echo "Private checkout and Fear & Greed imports validated. No network request ran and nothing was sent."
+
+      - name: Verify production secrets are present
+        if: inputs.mode == 'send'
+        shell: bash
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_FEAR_GREED_CHANNEL_ID: ${{ secrets.DISCORD_FEAR_GREED_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+          for name in DISCORD_BOT_TOKEN DISCORD_FEAR_GREED_CHANNEL_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Required secret is missing: ${name}" >&2
+              exit 1
+            fi
+          done
+          echo "Required secret names are configured; values were not printed."
+
+      - name: Fetch Fear & Greed and send to Discord with output suppressed
+        if: inputs.mode == 'send'
+        working-directory: .private-src/services/scanner
+        shell: bash
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_FEAR_GREED_CHANNEL_ID: ${{ secrets.DISCORD_FEAR_GREED_CHANNEL_ID }}
+          TZ: Asia/Jerusalem
+        run: |
+          set -euo pipefail
+          if ! python fear_greed.py >"${RUNNER_TEMP}/fear-greed.log" 2>&1; then
+            echo "Fear & Greed failed; application output was intentionally withheld from the public log." >&2
+            exit 1
+          fi
+          echo "Fear & Greed completed; application output was intentionally withheld from the public log."
