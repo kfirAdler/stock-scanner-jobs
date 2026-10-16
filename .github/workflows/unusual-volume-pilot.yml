@@ -1,0 +1,100 @@
+name: Unusual volume pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Validation only, or send real Discord alerts"
+        type: choice
+        required: true
+        default: validate
+        options:
+          - validate
+          - send
+
+# The public repository token never needs write access.
+permissions:
+  contents: read
+
+concurrency:
+  group: unusual-volume-pilot
+  cancel-in-progress: true
+
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: unusual-volume-pilot
+
+    steps:
+      - name: Check out the private scanner at the reviewed commit
+        uses: actions/checkout@v4
+        with:
+          repository: kfirAdler/stock-scanner
+          ref: a7f66e059fca0a842a26fd27dc1768e6a5ccc11b
+          token: ${{ secrets.PRIVATE_SCANNER_READ_TOKEN }}
+          persist-credentials: false
+          path: .private-src
+          show-progress: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scanner dependencies quietly
+        working-directory: .private-src/services/scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! python -m pip install --disable-pip-version-check --quiet -r requirements.txt >"${RUNNER_TEMP}/pip-install.log" 2>&1; then
+            echo "Dependency installation failed; detailed output was intentionally withheld from the public log." >&2
+            exit 1
+          fi
+
+      - name: Validate private scanner without scanning or sending
+        if: inputs.mode == 'validate'
+        working-directory: .private-src/services/scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! python -c "from src.automations.unusual_volume import scan, volume_embed; assert callable(scan) and callable(volume_embed)" >"${RUNNER_TEMP}/private-validation.log" 2>&1; then
+            echo "Private scanner validation failed; detailed output was intentionally withheld from the public log." >&2
+            exit 1
+          fi
+          echo "Private checkout and unusual-volume imports validated. No scan ran and nothing was sent."
+
+      - name: Verify production secrets are present
+        if: inputs.mode == 'send'
+        shell: bash
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_UNUSUAL_VOLUME_CHANNEL_ID: ${{ secrets.DISCORD_UNUSUAL_VOLUME_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+          for name in NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY DISCORD_BOT_TOKEN DISCORD_UNUSUAL_VOLUME_CHANNEL_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Required secret is missing: ${name}" >&2
+              exit 1
+            fi
+          done
+          echo "Required secret names are configured; values were not printed."
+
+      - name: Run unusual-volume and suppress application output
+        if: inputs.mode == 'send'
+        working-directory: .private-src/services/scanner
+        shell: bash
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_UNUSUAL_VOLUME_CHANNEL_ID: ${{ secrets.DISCORD_UNUSUAL_VOLUME_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+          if ! python run_unusual_volume.py --send >"${RUNNER_TEMP}/unusual-volume.log" 2>&1; then
+            echo "Unusual-volume failed; application output was intentionally withheld from the public log." >&2
+            exit 1
+          fi
+          echo "Unusual-volume completed; application output was intentionally withheld from the public log."
