@@ -88,8 +88,24 @@ jobs:
           TZ: Asia/Jerusalem
         run: |
           set -euo pipefail
-          if ! python fear_greed.py >"${RUNNER_TEMP}/fear-greed.log" 2>&1; then
-            echo "Fear & Greed failed; application output was intentionally withheld from the public log." >&2
+          private_log="${RUNNER_TEMP}/fear-greed.log"
+          if ! python fear_greed.py >"${private_log}" 2>&1; then
+            if grep -q "DISCORD_FEAR_GREED_CHANNEL_ID is missing or is not a valid" "${private_log}"; then
+              reason="the Discord channel ID format is invalid"
+            elif grep -q "Discord HTTP 401" "${private_log}"; then
+              reason="Discord rejected the bot token"
+            elif grep -q "Discord HTTP 403" "${private_log}"; then
+              reason="the bot lacks permission to post in the Discord channel"
+            elif grep -q "Discord HTTP 404" "${private_log}"; then
+              reason="the Discord channel was not found or is inaccessible to the bot"
+            elif grep -Eq "production\.dataviz\.cnn\.io|CNN response" "${private_log}"; then
+              reason="the CNN data request or response failed"
+            elif grep -Eqi "cairo|svg|fear-greed\.png" "${private_log}"; then
+              reason="the gauge image could not be rendered"
+            else
+              reason="an unclassified private application error occurred"
+            fi
+            echo "Fear & Greed failed: ${reason}. Detailed output was intentionally withheld from the public log." >&2
             exit 1
           fi
           echo "Fear & Greed completed; application output was intentionally withheld from the public log."
