@@ -1,0 +1,51 @@
+name: Economic calendar
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        required: true
+        default: validate
+        options: [validate, send]
+
+permissions: {contents: read}
+concurrency: {group: economic-calendar, cancel-in-progress: false}
+
+jobs:
+  calendar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: scanner-jobs
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: kfirAdler/stock-scanner
+          ref: a7f66e059fca0a842a26fd27dc1768e6a5ccc11b
+          token: ${{ secrets.PRIVATE_SCANNER_READ_TOKEN }}
+          persist-credentials: false
+          path: .private-src
+          show-progress: false
+      - uses: actions/setup-python@v6
+        with: {python-version: "3.12"}
+      - name: Install private dependencies quietly
+        working-directory: .private-src/services/scanner
+        run: |
+          if ! python -m pip install --disable-pip-version-check --quiet -r requirements.txt >"${RUNNER_TEMP}/pip.log" 2>&1; then
+            echo "Dependency installation failed; details withheld." >&2; exit 1
+          fi
+      - name: Validate module without network or sending
+        if: inputs.mode == 'validate'
+        working-directory: .private-src/services/scanner
+        run: python -m py_compile run_economic_calendar.py && echo "Economic calendar validated; nothing was sent."
+      - name: Generate and send with output suppressed
+        if: inputs.mode == 'send'
+        working-directory: .private-src/services/scanner
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_ECONOMIC_CALENDAR_CHANNEL_ID: ${{ secrets.DISCORD_ECONOMIC_CALENDAR_CHANNEL_ID }}
+        run: |
+          if ! python run_economic_calendar.py --send >"${RUNNER_TEMP}/economic-calendar.log" 2>&1; then
+            echo "Economic calendar failed; private output withheld." >&2; exit 1
+          fi
+          echo "Economic calendar completed; private output withheld."

@@ -1,0 +1,56 @@
+name: Live stock news
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        required: true
+        default: validate
+        options: [validate, send]
+
+permissions: {contents: read}
+concurrency: {group: live-stock-news, cancel-in-progress: false}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: scanner-jobs
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: kfirAdler/stock-scanner
+          ref: a7f66e059fca0a842a26fd27dc1768e6a5ccc11b
+          token: ${{ secrets.PRIVATE_SCANNER_READ_TOKEN }}
+          persist-credentials: false
+          path: .private-src
+          show-progress: false
+      - uses: actions/setup-python@v6
+        with: {python-version: "3.12"}
+      - name: Install private dependencies quietly
+        working-directory: .private-src/services/scanner
+        run: |
+          if ! python -m pip install --disable-pip-version-check --quiet -r requirements.txt >"${RUNNER_TEMP}/pip.log" 2>&1; then
+            echo "Dependency installation failed; details withheld." >&2; exit 1
+          fi
+      - name: Validate module without network or sending
+        if: inputs.mode == 'validate'
+        working-directory: .private-src/services/scanner
+        run: python -m py_compile run_live_stock_news.py && echo "Live stock news validated; nothing was sent."
+      - name: Detect and send with output suppressed
+        if: inputs.mode == 'send'
+        working-directory: .private-src/services/scanner
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_NEWS_CHANNEL_ID: ${{ secrets.DISCORD_NEWS_CHANNEL_ID }}
+          DISCORD_NEWS_CHANNEL_NAME: ${{ vars.DISCORD_NEWS_CHANNEL_NAME || 'stock-news' }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: |
+          if ! python run_live_stock_news.py --send >"${RUNNER_TEMP}/live-news.log" 2>&1; then
+            echo "Live stock news failed; private output withheld." >&2; exit 1
+          fi
+          echo "Live stock news completed; private output withheld."

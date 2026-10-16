@@ -1,0 +1,95 @@
+name: Refresh market snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        required: true
+        default: validate
+        options: [validate, run]
+      force_recompute:
+        type: boolean
+        default: false
+      tickers:
+        description: "Optional space-separated tickers"
+        required: false
+        default: ""
+      universe:
+        type: choice
+        options: [all, us, ta, indices]
+        default: all
+
+permissions: {contents: read}
+concurrency: {group: refresh-market-snapshot, cancel-in-progress: false}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: scanner-jobs
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: kfirAdler/stock-scanner
+          ref: a7f66e059fca0a842a26fd27dc1768e6a5ccc11b
+          token: ${{ secrets.PRIVATE_SCANNER_READ_TOKEN }}
+          persist-credentials: false
+          path: .private-src
+          show-progress: false
+      - uses: actions/setup-node@v6
+        with: {node-version: "24", package-manager-cache: false}
+      - uses: actions/setup-python@v6
+        with: {python-version: "3.12"}
+      - name: Install private dependencies quietly
+        working-directory: .private-src/services/scanner
+        run: |
+          if ! python -m pip install --disable-pip-version-check --quiet -r requirements.txt >"${RUNNER_TEMP}/pip.log" 2>&1; then
+            echo "Dependency installation failed; details withheld." >&2; exit 1
+          fi
+      - name: Validate private modules without network or writes
+        if: inputs.mode == 'validate'
+        working-directory: .private-src/services/scanner
+        run: |
+          python -m py_compile run_refresh.py run_alert_check.py run_pattern_notifications.py run_breakout_notifications.py run_market_news_check.py run_refresh_metadata.py
+          echo "Market refresh modules validated; no database write or Discord send ran."
+      - name: Run refresh with output suppressed
+        if: inputs.mode == 'run'
+        working-directory: .private-src/services/scanner
+        timeout-minutes: 45
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FORCE_RECOMPUTE: ${{ inputs.force_recompute }}
+          GHA_REFRESH_TICKERS: ${{ inputs.tickers }}
+          GHA_REFRESH_UNIVERSE: ${{ inputs.universe }}
+        run: |
+          args=()
+          if [ "$FORCE_RECOMPUTE" = true ]; then args+=(--force-recompute); fi
+          if [ -n "${GHA_REFRESH_TICKERS:-}" ]; then
+            if ! python run_refresh.py "${args[@]}" --tickers ${GHA_REFRESH_TICKERS} >"${RUNNER_TEMP}/refresh.log" 2>&1; then
+              echo "Market refresh failed; private output withheld." >&2; exit 1
+            fi
+          elif ! python run_refresh.py "${args[@]}" --universe "${GHA_REFRESH_UNIVERSE:-all}" >"${RUNNER_TEMP}/refresh.log" 2>&1; then
+            echo "Market refresh failed; private output withheld." >&2; exit 1
+          fi
+      - name: Run post-refresh jobs with output suppressed
+        if: inputs.mode == 'run'
+        working-directory: .private-src/services/scanner
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_PATTERN_ASCENDING_TRIANGLE_CHANNEL_ID: ${{ secrets.DISCORD_PATTERN_ASCENDING_TRIANGLE_CHANNEL_ID }}
+          DISCORD_PATTERN_CHANNEL_CHANNEL_ID: ${{ secrets.DISCORD_PATTERN_CHANNEL_CHANNEL_ID }}
+          DISCORD_PATTERN_CUP_AND_HANDLE_CHANNEL_ID: ${{ secrets.DISCORD_PATTERN_CUP_AND_HANDLE_CHANNEL_ID }}
+          DISCORD_PATTERN_BULL_FLAG_CHANNEL_ID: ${{ secrets.DISCORD_PATTERN_BULL_FLAG_CHANNEL_ID }}
+          DISCORD_PATTERN_INVERSE_HEAD_AND_SHOULDERS_CHANNEL_ID: ${{ secrets.DISCORD_PATTERN_INVERSE_HEAD_AND_SHOULDERS_CHANNEL_ID }}
+          DISCORD_BREAKOUTS_CHANNEL_ID: ${{ secrets.DISCORD_BREAKOUTS_CHANNEL_ID }}
+        run: |
+          private_log="${RUNNER_TEMP}/post-refresh.log"
+          if ! python run_alert_check.py >"${private_log}" 2>&1; then echo "Alert check failed; private output withheld." >&2; exit 1; fi
+          if ! python run_pattern_notifications.py >"${private_log}" 2>&1; then echo "Pattern notifications failed; private output withheld." >&2; exit 1; fi
+          if ! python run_breakout_notifications.py >"${private_log}" 2>&1; then echo "Breakout notifications failed; private output withheld." >&2; exit 1; fi
+          if ! python run_market_news_check.py >"${private_log}" 2>&1; then echo "Market news check failed; private output withheld." >&2; exit 1; fi
+          echo "Market refresh and post-refresh jobs completed; private output withheld."

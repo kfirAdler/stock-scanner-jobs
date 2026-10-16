@@ -1,0 +1,59 @@
+name: Market RSS headlines
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        required: true
+        default: validate
+        options: [validate, send]
+
+permissions: {contents: read}
+concurrency: {group: market-rss-headlines, cancel-in-progress: false}
+
+jobs:
+  headlines:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: scanner-jobs
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: kfirAdler/stock-scanner
+          ref: a7f66e059fca0a842a26fd27dc1768e6a5ccc11b
+          token: ${{ secrets.PRIVATE_SCANNER_READ_TOKEN }}
+          persist-credentials: false
+          path: .private-src
+          show-progress: false
+      - uses: actions/setup-python@v6
+        with: {python-version: "3.12"}
+      - name: Validate module without network or sending
+        if: inputs.mode == 'validate'
+        working-directory: .private-src/services/scanner
+        run: python -m py_compile run_rss_news.py && echo "RSS headlines validated; nothing was sent."
+      - name: Restore private delivery state
+        if: inputs.mode == 'send'
+        uses: actions/cache/restore@v4
+        with:
+          path: .private-src/services/scanner/.rss-news-state.json
+          key: market-rss-headlines-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: market-rss-headlines-
+      - name: Fetch and send with output suppressed
+        if: inputs.mode == 'send'
+        working-directory: .private-src/services/scanner
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_RSS_CHANNEL_ID: ${{ secrets.DISCORD_RSS_CHANNEL_ID }}
+          DISCORD_RSS_WEBHOOK_URL: ${{ secrets.DISCORD_RSS_WEBHOOK_URL }}
+        run: |
+          if ! python run_rss_news.py --send >"${RUNNER_TEMP}/rss.log" 2>&1; then
+            echo "RSS headlines failed; private output withheld." >&2; exit 1
+          fi
+          echo "RSS headlines completed; private output withheld."
+      - name: Preserve delivery state
+        if: inputs.mode == 'send' && success() && hashFiles('.private-src/services/scanner/.rss-news-state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .private-src/services/scanner/.rss-news-state.json
+          key: market-rss-headlines-${{ github.run_id }}-${{ github.run_attempt }}
