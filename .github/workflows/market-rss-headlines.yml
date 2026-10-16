@@ -45,10 +45,22 @@ jobs:
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_RSS_CHANNEL_ID: ${{ secrets.DISCORD_RSS_CHANNEL_ID }}
-          DISCORD_RSS_WEBHOOK_URL: ${{ secrets.DISCORD_RSS_WEBHOOK_URL }}
         run: |
-          if ! python run_rss_news.py --send >"${RUNNER_TEMP}/rss.log" 2>&1; then
-            echo "RSS headlines failed; private output withheld." >&2; exit 1
+          private_log="${RUNNER_TEMP}/rss.log"
+          if ! python run_rss_news.py --send >"${private_log}" 2>&1; then
+            if grep -q "Set DISCORD_BOT_TOKEN and DISCORD_RSS_CHANNEL_ID" "${private_log}"; then
+              reason="the Discord bot token or RSS channel ID is missing or invalid"
+            elif grep -Eq "HTTP Error 401|HTTP 401" "${private_log}"; then
+              reason="Discord rejected the bot token"
+            elif grep -Eq "HTTP Error 403|HTTP 403" "${private_log}"; then
+              reason="the bot lacks permission to post in the RSS channel"
+            elif grep -Eq "HTTP Error 404|HTTP 404" "${private_log}"; then
+              reason="the RSS channel was not found or is inaccessible to the bot"
+            else
+              reason="an unclassified private RSS or Discord error occurred"
+            fi
+            echo "RSS headlines failed: ${reason}. Private output withheld." >&2
+            exit 1
           fi
           echo "RSS headlines completed; private output withheld."
       - name: Preserve delivery state
