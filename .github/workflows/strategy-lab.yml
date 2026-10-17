@@ -1,0 +1,64 @@
+name: Strategy Lab daily evaluation
+
+on:
+  schedule:
+    # Safely after the US close in both daylight-saving and standard time.
+    - cron: "30 23 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        required: true
+        default: validate
+        options: [validate, run]
+      tickers:
+        description: "Optional space-separated ticker subset"
+        required: false
+        default: ""
+
+permissions: {contents: read}
+concurrency: {group: strategy-lab-daily, cancel-in-progress: false}
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: scanner-jobs
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: kfirAdler/stock-scanner
+          ref: 76cc766
+          token: ${{ secrets.PRIVATE_SCANNER_READ_TOKEN }}
+          persist-credentials: false
+          path: .private-src
+          show-progress: false
+      - uses: actions/setup-python@v6
+        with: {python-version: "3.12"}
+      - name: Install private dependencies quietly
+        working-directory: .private-src/services/scanner
+        run: |
+          if ! python -m pip install --disable-pip-version-check --quiet -r requirements.txt >"${RUNNER_TEMP}/pip.log" 2>&1; then
+            echo "Dependency installation failed; details withheld." >&2; exit 1
+          fi
+      - name: Validate without database reads or writes
+        if: inputs.mode == 'validate'
+        working-directory: .private-src/services/scanner
+        run: |
+          python -m py_compile run_strategy_lab.py src/strategy_lab/evaluator.py src/strategy_lab/job.py
+          echo "Strategy Lab validated; no database operation ran."
+      - name: Evaluate and update compact signal records
+        if: github.event_name == 'schedule' || inputs.mode == 'run'
+        working-directory: .private-src/services/scanner
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          STRATEGY_LAB_TICKERS: ${{ inputs.tickers }}
+        run: |
+          private_log="${RUNNER_TEMP}/strategy-lab.log"
+          args=()
+          if [ -n "${STRATEGY_LAB_TICKERS:-}" ]; then args=(${STRATEGY_LAB_TICKERS}); fi
+          if ! python run_strategy_lab.py "${args[@]}" >"${private_log}" 2>&1; then
+            echo "Strategy Lab evaluation failed; private output withheld." >&2; exit 1
+          fi
+          echo "Strategy Lab evaluation completed; private output withheld."
