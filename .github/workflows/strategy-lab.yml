@@ -1,9 +1,6 @@
 name: Strategy Lab daily evaluation
 
 on:
-  schedule:
-    # Safely after the US close in both daylight-saving and standard time.
-    - cron: "30 23 * * 1-5"
   workflow_dispatch:
     inputs:
       mode:
